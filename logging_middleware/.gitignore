@@ -1,0 +1,133 @@
+Notification System Design
+Stage 1
+So the frontend dev on my team needs to know what APIs exist so they can show notifications to students after they log in. I sat down and thought about what all a notification screen actually needs to do and came up with this.
+What the platform needs to support
+From a student's point of view, they should be able to:
+
+see all their notifications when they open the app
+click one and have it marked as read
+see a little badge showing how many unread ones they have
+filter by type — like only placements or only events
+get new notifications instantly without having to refresh the page
+
+That last one needs WebSockets, rest are normal REST endpoints.
+
+Base URL
+http://localhost:5000/api
+Auth is pre-handled so I'm just passing the student's ID in a header called X-Student-ID to know whose notifications to serve.
+
+Endpoints
+GET /notifications
+Pulls the notification list for a student. Has pagination and optional type filter.
+Headers:
+Content-Type: application/json
+X-Student-ID: <student_id>
+Query params:
+
+page — default 1
+limit — default 20, max 100
+notification_type — optional, values: Event / Result / Placement
+
+Example: GET /api/notifications?page=1&limit=10&notification_type=Placement
+Response 200:
+json{
+  "success": true,
+  "page": 1,
+  "limit": 10,
+  "total": 3,
+  "notifications": [
+    {
+      "id": "b283218f-ea5a-4b7c-93a9-1f2f240d64b0",
+      "type": "Placement",
+      "message": "CSX Corporation hiring",
+      "timestamp": "2026-04-22T17:51:18Z",
+      "isRead": false
+    }
+  ]
+}
+
+GET /notifications/:id
+For when a student clicks on a specific notification.
+Headers:
+Content-Type: application/json
+X-Student-ID: <student_id>
+Response 200:
+json{
+  "success": true,
+  "notification": {
+    "id": "81589ada-0ad3-4f77-9554-f52fb558e09d",
+    "type": "Event",
+    "message": "farewell",
+    "timestamp": "2026-04-22T17:51:06Z",
+    "isRead": false
+  }
+}
+Response 404:
+json{
+  "success": false,
+  "error": "notification not found"
+}
+
+PATCH /notifications/:id/read
+Marks one notification as read when opened.
+Headers:
+Content-Type: application/json
+X-Student-ID: <student_id>
+Response 200:
+json{
+  "success": true,
+  "message": "marked as read",
+  "id": "81589ada-0ad3-4f77-9554-f52fb558e09d"
+}
+
+PATCH /notifications/read-all
+For the "mark all as read" button.
+Headers:
+Content-Type: application/json
+X-Student-ID: <student_id>
+Response 200:
+json{
+  "success": true,
+  "message": "all marked as read",
+  "updatedCount": 7
+}
+
+GET /notifications/unread-count
+Just the count — so the navbar badge doesn't have to load the whole list.
+Headers:
+Content-Type: application/json
+X-Student-ID: <student_id>
+Response 200:
+json{
+  "success": true,
+  "unreadCount": 5
+}
+
+Real-time — WebSocket
+I went with WebSockets over SSE because it's two-way, so later if we need the client to send something back (like an ack), we already have that channel open.
+Connection: ws://localhost:5000/ws/notifications?studentId=<student_id>
+On the server side I just maintain a plain object mapping student IDs to their socket connection. When a notification gets created for a student, I look them up in that map and push it directly if they're online. If they're offline it just stays in the DB and they'll get it on next load.
+What the server sends when a new notification comes in:
+json{
+  "event": "new_notification",
+  "data": {
+    "id": "1cfce5ee-ad37-4894-8946-d707627176a5",
+    "type": "Event",
+    "message": "tech-fest",
+    "timestamp": "2026-04-22T17:50:06Z",
+    "isRead": false
+  }
+}
+Client pings every 30s to keep the connection alive:
+json{ "event": "ping" }
+Server responds:
+json{ "event": "pong" }
+
+Errors
+All errors look the same across every endpoint:
+json{
+  "success": false,
+  "error": "what went wrong",
+  "code": 404
+}
+400 → bad input, 404 → not found, 500 → server broke
